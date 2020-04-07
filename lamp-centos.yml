@@ -1,0 +1,182 @@
+# PLAYBOOK lamp-centos.yml
+# 
+# Auteur : Christophe CADO (TopheC)
+# Contenu - 20200407
+# CENTOS 7.7 (à date)
+# Repos: epel, remi, avec leurs clés
+# HTTP : Apache 2
+# Language : PHP v7.2
+# Extensions PHP : minimum utile
+# BdD : MariaDB v5.5
+# Tools : htop, nano, yum-utils, unzip 
+# Firewall : ouverture du port 80 et 22 uniquement
+# Updates : mise à jour distrib OS
+#
+#
+# Reste à faire : 20200407
+# dernière màj : update yum à lancer en fin de provisionning
+# sécuriser MariaDB
+# sécuriser Apache : 
+#    - disable sslv3 tlsv1.0 et 1.1 
+# permettre le choix de version PHP
+# Copier les sources Netbox vers destination (si besoin)
+
+
+---
+- hosts: default
+  vars:
+    centos_version_number: 7.7
+    php_version: php72
+    epel_release_url: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm"
+    remi_release_url: "http://rpms.remirepo.net/enterprise/remi-release-7.rpm"
+    remi_key_url: "http://rpms.remirepo.net/RPM-GPG-KEY-remi"
+  
+  handlers:
+    - name: restart-httpd
+      service: 
+        name: httpd
+        state: restarted
+      become: yes
+
+# Handler showing how to clean yum metadata cache
+    - name: yum-clean-metadata
+      command: yum clean metadata
+      args:
+        warn: no
+      become: yes
+
+  tasks:
+   - name: 10-Installation des dépots REMI, EPEL et des outils yum
+     yum: 
+       name: 
+         - "{{ remi_release_url }}"
+         - "{{ epel_release_url }}"
+         - yum-utils
+         - deltarpm
+     become: yes 
+
+   - name: 20-Obtention de la clé du dépot REMI
+     get_url: 
+       url: "{{ remi_key_url }}" 
+       dest: /etc/pki/rpm-gpg/RPM-GPG-KEY-remi
+     become: yes 
+
+   - name: 30-Activation du dépot EPEL
+     shell: yum-config-manager --enable epel
+#       name: epel
+#       description: EPEL YUM repo
+#       baseurl: https://download.fedoraproject.org/pub/epel/$releasever/$basearch/
+#       enabled: yes
+#       gpgcheck: 1
+#       gpgkey: https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-{{ ansible_distribution_major_version }}
+     become: yes
+ 
+   - name: 40-Activation du dépot REMI php7.2
+     shell: yum-config-manager --enable remi-{{php_version}}
+#       name: remi-php72
+#       description: REMI YUM repo php7.2
+#       baseurl: http://rpms.remirepo.net/enterprise/{{ centos_version_number }}/{{ php_version }}/mirror
+#       enabled: yes
+#       gpgcheck: 1
+#       gpgkey: "{{remi_key_url}}"
+     become: yes     
+     notify: yum-clean-metadata
+
+   - name: 50-Installation Apache
+     yum: 
+       name: httpd
+       state: present
+     become: yes
+
+   - name: 60-Installation PHP
+     yum:
+       name: php
+       state: present
+     become: yes
+
+   - name: 70-Installation extensions PHP
+     yum: 
+       name:    
+       - php-fpm 
+       - php-mysqlnd 
+       - php-opcache
+       - php-xml 
+       - php-xmlrpc
+       - php-gd
+       - php-mbstring
+       - php-json
+       - memcached
+       enablerepo: "remi-{{ php_version }},epel"
+       state: present
+     become: yes
+
+   - name: 80-Installation python mysql # required for mysql_db tasks
+     yum: 
+       name: MySQL-python
+       state: present
+     become: yes
+
+   - name: 90-Installation de MariaDB
+     yum: 
+       name: mariadb-server
+       state: present
+     become: yes
+
+   - name: 100-Installation des outils systèmes
+     yum:
+       name:
+         - htop
+         - unzip
+       state : present
+     become: yes
+
+   - name: 110-Démarrage Apache
+     service: 
+       name: httpd
+       state: started
+       enabled: yes
+     become: yes
+
+   - name: 120-Démarrage MariaDB
+     service:
+       name: mariadb
+       state: started
+       enabled: yes
+     become: yes
+
+   - name: 130-Copie indexphp.php pour test de validation
+     copy: 
+       src: lamp-centos.yml.index.php 
+       dest: /var/www/html/indexphp.php
+     notify:
+       - restart-httpd
+     become: yes
+
+   - name: 140-Copie des sources
+     copy:
+       src: ~/git/netbox/netbox.zip
+       dest: /var/www/html/netbox.zip
+     become: yes
+
+   - name: 150-Desarchivage d'un fichier dèjà présent sur la machine cible
+     unarchive:
+       src: /var/www/html/netbox.zip
+       dest: /var/www/html/netbox/
+       remote_src: yes
+     become: yes
+ 
+   - name: 160-Ajout de la règle de pare-feu
+     action: 
+       command /usr/bin/firewall-cmd --permanent --add-port=80/tcp
+     become: yes
+
+   - name: 170-Redémarrage du pare-feu
+     service: 
+       name: firewalld
+       state: restarted
+     become: yes
+
+   - name: 180-Mise à jour de tous les paquets
+     yum: name=* state=latest
+     become: yes
+
